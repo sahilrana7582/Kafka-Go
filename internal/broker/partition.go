@@ -3,6 +3,7 @@ package broker
 import (
 	"fmt"
 	"hash/fnv"
+	"log"
 	"path/filepath"
 	"time"
 )
@@ -33,7 +34,7 @@ func (b *Broker) AppendMessage(topic, key, message string) error {
 		return err
 	}
 	partitionPath := filepath.Join("kafka-data", topic, partition.Name)
-	cacheKey := fmt.Sprintf("%s:%s", topic, key)
+	cacheKey := partitionPath
 
 	val, ok := b.writeCache.Get(cacheKey)
 	if !ok {
@@ -45,10 +46,12 @@ func (b *Broker) AppendMessage(topic, key, message string) error {
 		val = partitionWrite
 	}
 	messageFormatted := FormatProductionMessage(key, topic, message)
-	writer := val.(*PartitionWriter)
-	writer.MessagesChan <- messageFormatted
+	writer := val
 
-	fmt.Printf("📝 Message appended to %s: %s\n", partition.Name, message)
+	if err := writer.Send(messageFormatted); err != nil {
+		log.Printf("❌ Failed to send message: %v", err)
+	}
+
 	return nil
 }
 
@@ -56,7 +59,7 @@ func FormatProductionMessage(key, topic, value string) string {
 	unixMillis := time.Now().UnixMilli()
 	timestamp := time.Now().Format("2006-01-02T15:04:05.000Z07:00")
 
-	return fmt.Sprintf("%d	|	%s	|	%s	|	%s	|	%s\n",
+	return fmt.Sprintf("%d	|	%s	|	%s	|	%s	|	%s",
 		unixMillis,
 		timestamp,
 		key,

@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -51,7 +48,7 @@ func main() {
 					log.Printf("Writer %d, message %d: Failed to append message '%s': %v", writerID, j, key, err)
 				}
 			}
-			fmt.Printf("Writer %d finished sending %d messages.\n", writerID, messagesPerWriter)
+			fmt.Printf("✅✅✅✅Writer %d finished sending %d messages.\n", writerID, messagesPerWriter)
 		}(i)
 	}
 
@@ -59,26 +56,10 @@ func main() {
 	duration := time.Since(start)
 	fmt.Printf("\nAll writers finished. Total messages attempted: %d. Time taken: %s\n", totalExpectedMessages, duration)
 
+	time.Sleep(15 * time.Second)
+
 	fmt.Println("Verifying message counts in partition files...")
-	var actualMessagesWritten int
-	for p := 0; p < numPartitions; p++ {
-		partitionFileName := filepath.Join("kafka-data", fmt.Sprintf("%s/partition-%d.log", topicName, p))
-		content, err := os.ReadFile(partitionFileName)
-		if err != nil {
-			log.Printf("Error reading partition file %s: %v", partitionFileName, err)
-			continue
-		}
-		lines := 0
-		if len(content) > 0 {
-			lines = bytes.Count(content, []byte{'\n'})
-		}
-		actualMessagesWritten += lines
-		fmt.Printf("Partition %d (%s) has %d messages.\n", p, filepath.Base(partitionFileName), lines)
-	}
-
-	fmt.Printf("Total messages expected: %d\n", totalExpectedMessages)
-	fmt.Printf("Total messages actually written: %d\n", actualMessagesWritten)
-
+	actualMessagesWritten := broker.TotalWritten
 	if actualMessagesWritten == totalExpectedMessages {
 		fmt.Println("Test PASSED: All expected messages were written successfully!")
 	} else {

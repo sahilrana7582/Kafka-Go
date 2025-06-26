@@ -21,10 +21,9 @@ func New(cap int) *Cache {
 	}
 }
 
-func (c *Cache) Get(key string) (interface{}, bool) {
+func (c *Cache) Get(key string) (*PartitionWriter, bool) {
 	if elem, found := c.items[key]; found {
 		c.list.MoveToFront(elem)
-
 		return elem.Value.(*entry).value, true
 	}
 
@@ -34,6 +33,12 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 func (c *Cache) Put(key string, value *PartitionWriter) {
 	if elem, ok := c.items[key]; ok {
 		c.list.MoveToFront(elem)
+
+		oldWriter := elem.Value.(*entry).value
+		if oldWriter != value {
+			oldWriter.Close()
+		}
+
 		elem.Value.(*entry).value = value
 		return
 	}

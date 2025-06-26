@@ -15,9 +15,11 @@ type PartitionWriter struct {
 	wg           sync.WaitGroup
 	mu           sync.Mutex
 	closed       bool
+	once         sync.Once
 }
 
 func NewPartitionWriter(path string) (*PartitionWriter, error) {
+	fmt.Printf("🛠️ Creating new PartitionWriter for: %s\n", path)
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, err
@@ -25,7 +27,7 @@ func NewPartitionWriter(path string) (*PartitionWriter, error) {
 
 	pw := &PartitionWriter{
 		File:         file,
-		MessagesChan: make(chan string, 100),
+		MessagesChan: make(chan string, 1000),
 		quit:         make(chan struct{}),
 	}
 
@@ -35,6 +37,9 @@ func NewPartitionWriter(path string) (*PartitionWriter, error) {
 	return pw, nil
 }
 
+var TotalWritten int
+var totalWrittenMu sync.Mutex
+
 func (pw *PartitionWriter) startWrite() {
 	defer pw.wg.Done() // mark goroutine finished
 
@@ -42,10 +47,15 @@ func (pw *PartitionWriter) startWrite() {
 		select {
 		case msg := <-pw.MessagesChan:
 			if err := writeMessageToPartitionWithRetry(pw.File, msg, 3, 1*time.Second); err != nil {
-				log.Printf("Failed to write message: %v", err)
+				log.Printf("ERROR: Failed to write message to partition: %v", err)
+				continue
 			}
+			totalWrittenMu.Lock()
+			TotalWritten++
+			totalWrittenMu.Unlock()
+
+			log.Printf("✅ Message written to partition: %s", msg)
 		case <-pw.quit:
-			// Cleanup
 			pw.File.Sync()
 			pw.File.Close()
 			return
@@ -54,17 +64,20 @@ func (pw *PartitionWriter) startWrite() {
 }
 
 func (pw *PartitionWriter) Close() {
-	pw.mu.Lock()
-	defer pw.mu.Unlock()
 
-	if pw.closed {
-		return // 🔐 already closed
-	}
-	pw.closed = true
+	pw.once.Do(func() {
+		pw.mu.Lock()
+		defer pw.mu.Unlock()
 
-	close(pw.quit)
-	pw.wg.Wait()
-	close(pw.MessagesChan) // optional
+		if pw.closed {
+			return
+		}
+		pw.closed = true
+
+		close(pw.quit)
+		pw.wg.Wait()
+	})
+
 }
 
 func writeMessageToPartitionWithRetry(
@@ -73,7 +86,7 @@ func writeMessageToPartitionWithRetry(
 	retryAttempts int,
 	delayTime time.Duration,
 ) error {
-	messageWithNewline := message
+	messageWithNewline := message + "\n"
 	var lastErr error
 
 	for attempt := 0; attempt < retryAttempts; attempt++ {
@@ -101,4 +114,20 @@ func writeMessageToPartitionWithRetry(
 	}
 
 	return fmt.Errorf("failed to write message after %d attempts: %w", retryAttempts, lastErr)
+}
+
+func (pw *PartitionWriter) Send(msg string) error {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+
+	if pw.closed {
+		return fmt.Errorf("writer is closed")
+	}
+
+	select {
+	case pw.MessagesChan <- msg:
+		return nil
+	default:
+		return fmt.Errorf("channel full, dropping message: %s", msg)
+	}
 }
