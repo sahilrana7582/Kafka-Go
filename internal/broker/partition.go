@@ -3,7 +3,6 @@ package broker
 import (
 	"fmt"
 	"hash/fnv"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -33,19 +32,21 @@ func (b *Broker) AppendMessage(topic, key, message string) error {
 	if err != nil {
 		return err
 	}
-
 	partitionPath := filepath.Join("kafka-data", topic, partition.Name)
-	file, err := os.OpenFile(partitionPath, os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open partition file: %w", err)
-	}
-	defer file.Close()
+	cacheKey := fmt.Sprintf("%s:%s", topic, key)
 
-	productionGradeMessage := FormatProductionMessage(key, topic, message)
-	_, err = file.WriteString(productionGradeMessage)
-	if err != nil {
-		return fmt.Errorf("failed to write message: %w", err)
+	val, ok := b.writeCache.Get(cacheKey)
+	if !ok {
+		partitionWrite, err := NewPartitionWriter(partitionPath)
+		if err != nil {
+			return fmt.Errorf("failed to create partition writer for %s: %w", partition.Name, err)
+		}
+		b.writeCache.Put(cacheKey, partitionWrite)
+		val = partitionWrite
 	}
+	messageFormatted := FormatProductionMessage(key, topic, message)
+	writer := val.(*PartitionWriter)
+	writer.MessagesChan <- messageFormatted
 
 	fmt.Printf("📝 Message appended to %s: %s\n", partition.Name, message)
 	return nil

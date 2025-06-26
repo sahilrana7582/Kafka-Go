@@ -1,26 +1,89 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/sahilrana7582/kafka-in-go/internal/broker"
 )
 
+const (
+	topicName             = "test-topic"
+	numPartitions         = 5  // Number of partitions for the topic
+	numConcurrentWriters  = 10 // Number of goroutines simulating clients
+	messagesPerWriter     = 10 // Number of messages each goroutine sends
+	totalExpectedMessages = numConcurrentWriters * messagesPerWriter
+	delayBetweenSends     = 1 * time.Millisecond // Small delay to simulate real traffic
+)
+
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	fmt.Println("--- Starting Hardcore Broker Test ---")
+
 	b := broker.NewBroker()
 
-	err := b.CreateTopic("test-topic", 3)
+	fmt.Printf("Creating topic '%s' with %d partitions...\n", topicName, numPartitions)
+	err := b.CreateTopic(topicName, numPartitions)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to create topic: %v", err)
+	}
+	fmt.Println("Topic created successfully.")
+
+	fmt.Printf("Starting %d concurrent writers, each sending %d messages...\n", numConcurrentWriters, messagesPerWriter)
+	var wg sync.WaitGroup
+	start := time.Now()
+
+	for i := 0; i < numConcurrentWriters; i++ {
+		wg.Add(1)
+		go func(writerID int) {
+			defer wg.Done()
+			for j := 0; j < messagesPerWriter; j++ {
+				key := fmt.Sprintf("key-%d-%d", writerID, j)
+				message := fmt.Sprintf("Message from writer %d, seq %d: %s", writerID, j, time.Now().Format(time.RFC3339Nano))
+
+				err := b.AppendMessage(topicName, key, message)
+				if err != nil {
+					log.Printf("Writer %d, message %d: Failed to append message '%s': %v", writerID, j, key, err)
+				}
+			}
+			fmt.Printf("Writer %d finished sending %d messages.\n", writerID, messagesPerWriter)
+		}(i)
 	}
 
-	for i := 0; i < 10; i++ {
-		err = b.AppendMessage("test-topic", fmt.Sprintf("key-%d", i), "Hello Kafka!")
+	wg.Wait()
+	duration := time.Since(start)
+	fmt.Printf("\nAll writers finished. Total messages attempted: %d. Time taken: %s\n", totalExpectedMessages, duration)
+
+	fmt.Println("Verifying message counts in partition files...")
+	var actualMessagesWritten int
+	for p := 0; p < numPartitions; p++ {
+		partitionFileName := filepath.Join("kafka-data", fmt.Sprintf("%s/partition-%d.log", topicName, p))
+		content, err := os.ReadFile(partitionFileName)
 		if err != nil {
-			panic(err)
+			log.Printf("Error reading partition file %s: %v", partitionFileName, err)
+			continue
 		}
+		lines := 0
+		if len(content) > 0 {
+			lines = bytes.Count(content, []byte{'\n'})
+		}
+		actualMessagesWritten += lines
+		fmt.Printf("Partition %d (%s) has %d messages.\n", p, filepath.Base(partitionFileName), lines)
 	}
-	fmt.Println("Messages appended successfully to topic 'test-topic'.")
-	fmt.Println("Broker is running. You can now produce and consume messages.")
 
+	fmt.Printf("Total messages expected: %d\n", totalExpectedMessages)
+	fmt.Printf("Total messages actually written: %d\n", actualMessagesWritten)
+
+	if actualMessagesWritten == totalExpectedMessages {
+		fmt.Println("Test PASSED: All expected messages were written successfully!")
+	} else {
+		fmt.Printf("Test FAILED: Mismatch in message count. Expected %d, Got %d.\n", totalExpectedMessages, actualMessagesWritten)
+	}
+
+	fmt.Println("\n--- Hardcore Broker Test Finished ---")
 }

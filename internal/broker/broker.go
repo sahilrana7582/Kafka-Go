@@ -19,12 +19,14 @@ type Topic struct {
 }
 
 type Broker struct {
-	topics map[string]*Topic
-	mu     sync.RWMutex
+	topics     map[string]*Topic
+	mu         sync.RWMutex
+	writeCache *Cache
 }
 
 func NewBroker() *Broker {
 	return &Broker{
-		topics: make(map[string]*Topic),
+		topics:     make(map[string]*Topic),
+		writeCache: New(5),
 	}
 }
