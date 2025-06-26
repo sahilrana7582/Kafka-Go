@@ -1,6 +1,10 @@
 package main
 
-import "github.com/sahilrana7582/kafka-in-go/internal/broker"
+import (
+	"fmt"
+
+	"github.com/sahilrana7582/kafka-in-go/internal/broker"
+)
 
 func main() {
 	b := broker.NewBroker()
@@ -9,9 +13,14 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	// Create another topic with a different number of partitions
-	err = b.CreateTopic("another-topic", 5)
-	if err != nil {
-		panic(err)
+
+	for i := 0; i < 10; i++ {
+		err = b.AppendMessage("test-topic", fmt.Sprintf("key-%d", i), "Hello Kafka!")
+		if err != nil {
+			panic(err)
+		}
 	}
+	fmt.Println("Messages appended successfully to topic 'test-topic'.")
+	fmt.Println("Broker is running. You can now produce and consume messages.")
+
 }
