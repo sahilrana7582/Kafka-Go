@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"github.com/sahilrana7582/kafka-in-go/internal/producer"
 )
 
 func (b *Broker) GetPartition(topic, key string) (Partition, error) {
@@ -66,4 +70,68 @@ func FormatProductionMessage(key, topic, value string) string {
 		topic,
 		value,
 	)
+}
+
+func (b *Broker) ReceiveProduceRequest(req producer.ProduceRequest) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	wg := sync.WaitGroup{}
+
+	for _, topic := range req.Topics {
+		wg.Add(1)
+		go func(topic producer.TopicData) {
+			defer wg.Done()
+			handleTopic(topic)
+		}(topic)
+	}
+
+	wg.Wait()
+	fmt.Printf("✅ Broker ACK: received batch for client\n")
+}
+
+func handleTopic(t producer.TopicData) {
+	wg := sync.WaitGroup{}
+
+	for partitionID, partition := range t.Partitions {
+		wg.Add(1)
+
+		go func(partitionID int32, partition producer.TopicPartitionData) {
+			defer wg.Done()
+
+			partitionPath := filepath.Join("kafka-data", t.TopicName, fmt.Sprintf("partition-%d.log", partitionID))
+
+			file, err := os.OpenFile(partitionPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				fmt.Printf("❌ Failed to open partition file %s: %v\n", partitionPath, err)
+				return
+			}
+			defer file.Close()
+			fmt.Printf("🛠️ Processing partition %d of topic %s...\n", partitionID, t.TopicName)
+			for _, record := range partition.RecordBatch.Records {
+				message := fmt.Sprintf("%s	|	|	%s	|	%s	|	%s\n",
+					record.Timestamp,
+					string(record.Key),
+					t.TopicName,
+					string(record.Value),
+				)
+				if _, err := file.WriteString(message); err != nil {
+					fmt.Printf("❌ Failed to write record to partition %d of topic %s: %v\n", partitionID, t.TopicName, err)
+					return
+				}
+			}
+			if err := file.Sync(); err != nil {
+				fmt.Printf("❌ Failed to sync partition file %s: %v\n", partitionPath, err)
+				return
+			}
+			fmt.Printf("✅ Partition %d of topic %s processed successfully.\n", partitionID, t.TopicName)
+			// Simulate a delay to mimic real-world processing
+			time.Sleep(100 * time.Millisecond)
+
+		}(partitionID, partition)
+
+	}
+
+	wg.Wait()
+	fmt.Printf("✅ Broker ACK: received batch for topic %s (Partitions: %d)\n", t.TopicName, len(t.Partitions))
 }

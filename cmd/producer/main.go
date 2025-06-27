@@ -12,19 +12,13 @@ func main() {
 	b := broker.NewBroker()
 	producer := p.NewProducer("example-producer", b)
 
+	b.CreateTopic("test-topic", 5)
+
 	wg := sync.WaitGroup{}
-	wg.Add(3)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		p.Demo("topic-1", producer)
-	}()
-	go func() {
-		defer wg.Done()
-		p.Demo("topic-2", producer)
-	}()
-	go func() {
-		defer wg.Done()
-		p.Demo("topic-3", producer)
+		p.Demo("test-topic", producer)
 	}()
 
 	wg.Wait()

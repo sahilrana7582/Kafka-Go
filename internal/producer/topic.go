@@ -98,7 +98,7 @@ func Demo(topicName string, producer *Producer) {
 			fmt.Printf("Produced record with key: %s, value: %s\n", record.Key, record.Value)
 		}
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 		producer.mu.Lock()
 		i++
 		producer.mu.Unlock()
@@ -108,6 +108,7 @@ func Demo(topicName string, producer *Producer) {
 func (producer *Producer) FlushBatch(topicName string, partitionId int32) {
 	producer.mu.Lock()
 	defer producer.mu.Unlock()
+
 	file, err := os.OpenFile("internal/producer/flush.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("❌ Failed to open flush log file: %v", err)
@@ -115,26 +116,60 @@ func (producer *Producer) FlushBatch(topicName string, partitionId int32) {
 	}
 	defer file.Close()
 
-	log := log.New(file, "FLUSH: ", log.LstdFlags|log.Lshortfile)
-	// Log the flush operation
+	logger := log.New(file, "FLUSH: ", log.LstdFlags|log.Lshortfile)
 
-	producer.mu.Lock()
-	defer producer.mu.Unlock()
-
-	topicData := producer.TopicMap[topicName]
-	partitionData, exists := topicData.Partitions[partitionId]
-	if !exists {
-		log.Printf("❌ Partition %d not found in topic %s\n", partitionId, topicName)
+	// Get topic data
+	topicData, ok := producer.TopicMap[topicName]
+	if !ok {
+		logger.Printf("❌ Topic %s not found\n", topicName)
 		return
 	}
-	log.Printf("Flushing %d records from topic %s partition %d\n", partitionData.RecordBatch.RecordCount, topicName, partitionId)
-	for _, record := range partitionData.RecordBatch.Records {
-		log.Printf("Flushing record: key=%s, value=%s\n", record.Key, record.Value)
+
+	// Get partition data
+	partitionData, ok := topicData.Partitions[partitionId]
+	if !ok {
+		logger.Printf("❌ Partition %d not found in topic %s\n", partitionId, topicName)
+		return
 	}
+
+	if partitionData.RecordBatch.RecordCount == 0 {
+		logger.Printf("⚠️  No records to flush for topic %s partition %d\n", topicName, partitionId)
+		return
+	}
+
+	// ✅ Construct ProduceRequest
+	produceReq := ProduceRequest{
+		Acks:      1,
+		TimeoutMs: 5000,
+		Topics: []TopicData{
+			{
+				TopicName: topicName,
+				Partitions: map[int32]TopicPartitionData{
+					partitionId: {
+						PartitionID: partitionId,
+						RecordBatch: partitionData.RecordBatch,
+					},
+				},
+			},
+		},
+	}
+
+	logger.Printf("🚀 Flushing %d records from topic %s partition %d\n", partitionData.RecordBatch.RecordCount, topicName, partitionId)
+	for _, record := range partitionData.RecordBatch.Records {
+		logger.Printf("Flushing record: key=%s, value=%s\n", record.Key, record.Value)
+	}
+
+	// 🔄 Send it to the Broker (if you want to simulate this)
+	if producer.Broker != nil {
+		producer.Broker.ReceiveProduceRequest(produceReq)
+	}
+
+	// 🔄 Clear batch after flushing
 	partitionData.RecordBatch.Records = nil
 	partitionData.RecordBatch.RecordCount = 0
 	topicData.Partitions[partitionId] = partitionData
 	producer.TopicMap[topicName] = topicData
-	log.Printf("✅ Flushed records for topic %s partition %d\n", topicName, partitionId)
-	log.Println("=========================================")
+
+	logger.Printf("✅ Flushed and cleared batch for topic %s partition %d\n", topicName, partitionId)
+	logger.Println("=========================================")
 }

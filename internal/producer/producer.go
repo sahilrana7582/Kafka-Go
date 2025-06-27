@@ -3,8 +3,6 @@ package producer
 import (
 	"sync"
 	"time"
-
-	"github.com/sahilrana7582/kafka-in-go/internal/broker"
 )
 
 const (
@@ -68,13 +66,17 @@ type Producer struct {
 	Name     string
 	TopicMap map[string]TopicData
 	mu       sync.Mutex
-	Broker   *broker.Broker
+	Broker   BrokerInterface
 }
 
-func NewProducer(name string, broker *broker.Broker) *Producer {
+func NewProducer(name string, broker BrokerInterface) *Producer {
 	return &Producer{
 		Name:     name,
 		TopicMap: make(map[string]TopicData),
 		Broker:   broker,
 	}
+}
+
+type BrokerInterface interface {
+	ReceiveProduceRequest(req ProduceRequest)
 }
