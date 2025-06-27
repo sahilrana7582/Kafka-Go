@@ -11,11 +11,11 @@ import (
 
 const (
 	topicName             = "test-topic"
-	numPartitions         = 5  // Number of partitions for the topic
-	numConcurrentWriters  = 10 // Number of goroutines simulating clients
-	messagesPerWriter     = 10 // Number of messages each goroutine sends
+	numPartitions         = 5
+	numConcurrentWriters  = 10
+	messagesPerWriter     = 200
 	totalExpectedMessages = numConcurrentWriters * messagesPerWriter
-	delayBetweenSends     = 1 * time.Millisecond // Small delay to simulate real traffic
+	delayBetweenSends     = 1 * time.Millisecond
 )
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 	duration := time.Since(start)
 	fmt.Printf("\nAll writers finished. Total messages attempted: %d. Time taken: %s\n", totalExpectedMessages, duration)
 
-	time.Sleep(15 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	fmt.Println("Verifying message counts in partition files...")
 	actualMessagesWritten := broker.TotalWritten

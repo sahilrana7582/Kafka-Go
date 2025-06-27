@@ -27,6 +27,6 @@ type Broker struct {
 func NewBroker() *Broker {
 	return &Broker{
 		topics:     make(map[string]*Topic),
-		writeCache: New(10),
+		writeCache: New(100),
 	}
 }

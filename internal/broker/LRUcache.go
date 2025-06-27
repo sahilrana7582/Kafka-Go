@@ -31,28 +31,8 @@ func (c *Cache) Get(key string) (*PartitionWriter, bool) {
 }
 
 func (c *Cache) Put(key string, value *PartitionWriter) {
-	if elem, ok := c.items[key]; ok {
-		c.list.MoveToFront(elem)
-
-		oldWriter := elem.Value.(*entry).value
-		if oldWriter != value {
-			oldWriter.Close()
-		}
-
-		elem.Value.(*entry).value = value
+	if _, ok := c.items[key]; ok {
 		return
-	}
-
-	if c.list.Len() >= c.capacity {
-		back := c.list.Back()
-		if back != nil {
-
-			write := back.Value.(*entry).value
-			write.Close() // Close the PartitionWriter before removing it
-			// Remove the least recently used item
-			c.list.Remove(back)
-			delete(c.items, back.Value.(*entry).key)
-		}
 	}
 
 	e := &entry{key: key, value: value}

@@ -56,9 +56,17 @@ func (pw *PartitionWriter) startWrite() {
 
 			log.Printf("✅ Message written to partition: %s", msg)
 		case <-pw.quit:
-			pw.File.Sync()
-			pw.File.Close()
-			return
+			// Drain remaining messages
+			for {
+				select {
+				case msg := <-pw.MessagesChan:
+					writeMessageToPartitionWithRetry(pw.File, msg, 3, time.Second)
+				default:
+					pw.File.Sync()
+					pw.File.Close()
+					return
+				}
+			}
 		}
 	}
 }
@@ -67,12 +75,12 @@ func (pw *PartitionWriter) Close() {
 
 	pw.once.Do(func() {
 		pw.mu.Lock()
-		defer pw.mu.Unlock()
-
 		if pw.closed {
+			pw.mu.Unlock()
 			return
 		}
 		pw.closed = true
+		pw.mu.Unlock()
 
 		close(pw.quit)
 		pw.wg.Wait()
