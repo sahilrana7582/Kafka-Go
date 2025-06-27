@@ -8,7 +8,9 @@ import (
 )
 
 const (
-	totalPartition = 5
+	totalPartition     = 5
+	bufferTime         = 2 * time.Second
+	maxRecordsPerBatch = 5
 )
 
 // Represents a single header within a Kafka record.
@@ -93,6 +95,7 @@ func main() {
 type Producer struct {
 	Name     string
 	TopicMap map[string]TopicData
+	mu       sync.Mutex
 }
 
 func NewProducer(name string) *Producer {
@@ -129,21 +132,36 @@ func (producer *Producer) AddPartition(topicName string, partitionID int32) {
 	}
 }
 
-func (producer *Producer) Produce(key, topicName string, record Record) error {
-	if topicData, exists := producer.TopicMap[topicName]; exists {
-		partitionId := partitionKey(key)
-		for i, partition := range topicData.Partitions {
-			if partition.PartitionID == partitionId {
-				topicData.Partitions[i].RecordBatch.Records = append(topicData.Partitions[i].RecordBatch.Records, record)
-				topicData.Partitions[i].RecordBatch.RecordCount++
-				topicData.Partitions[i].RecordBatch.BatchLength += int32(len(record.Key) + len(record.Value) + 8) // 8 bytes for OffsetDelta and Timestamp
-				producer.TopicMap[topicName] = topicData
-				return nil
-			}
-		}
+func (producer *Producer) AddTO(key, topicName string, record Record) error {
+	producer.mu.Lock()
+	defer producer.mu.Unlock()
+
+	topicData, exists := producer.TopicMap[topicName]
+	if !exists {
+		return fmt.Errorf("topic %s does not exist", topicName)
 	}
 
-	return fmt.Errorf("topic %s does not exist", topicName)
+	partitionId := partitionKey(key)
+	for i := range topicData.Partitions {
+		if topicData.Partitions[i].PartitionID == partitionId {
+			batch := &topicData.Partitions[i].RecordBatch
+
+			batch.Records = append(batch.Records, record)
+			batch.RecordCount++
+			batch.BatchLength += int32(len(record.Key) + len(record.Value) + 8)
+
+			// 👇 Persist updated topicData into map
+			producer.TopicMap[topicName] = topicData
+
+			fmt.Printf("✅ Partition %d | Record Count: %d, Max: %d\n", partitionId, batch.RecordCount, maxRecordsPerBatch)
+
+			if batch.RecordCount >= maxRecordsPerBatch {
+				go producer.FlushBatch(topicName, partitionId)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("partition %d not found in topic %s", partitionId, topicName)
 }
 
 func partitionKey(key string) int32 {
@@ -162,7 +180,8 @@ func demo(topicName string, producer *Producer) {
 	}
 
 	fmt.Printf("Added %d partitions to topic %s\n", totalPartition, topicName)
-	for i := 0; i < 10; i++ {
+	i := 0
+	for {
 		record := Record{
 			OffsetDelta: int32(i),
 			Timestamp:   time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
@@ -173,11 +192,44 @@ func demo(topicName string, producer *Producer) {
 			Value: []byte(fmt.Sprintf("value-%d", i)),
 		}
 
-		err := producer.Produce(fmt.Sprintf("key-%d", i), topicName, record)
+		err := producer.AddTO(fmt.Sprintf("key-%d", i), topicName, record)
 		if err != nil {
 			fmt.Printf("Failed to produce record: %v\n", err)
 		} else {
 			fmt.Printf("Produced record with key: %s, value: %s\n", record.Key, record.Value)
+		}
+
+		time.Sleep(2 * time.Second)
+		producer.mu.Lock()
+		i++
+		producer.mu.Unlock()
+	}
+}
+
+func (producer *Producer) FlushBatch(topicName string, partitionId int32) {
+	fmt.Printf("💾 FlushBatch() called for topic=%s partition=%d\n", topicName, partitionId)
+
+	producer.mu.Lock()
+	defer producer.mu.Unlock()
+
+	topicData := producer.TopicMap[topicName]
+	for i := range topicData.Partitions {
+		if topicData.Partitions[i].PartitionID == partitionId {
+			batch := topicData.Partitions[i].RecordBatch
+
+			if batch.RecordCount == 0 {
+				return
+			}
+
+			fmt.Printf("\n🚀 Flushing batch: Topic=%s Partition=%d Records=%d\n", topicName, partitionId, batch.RecordCount)
+			for _, record := range batch.Records {
+				fmt.Printf("   🔸 [Persisted] Key=%s, Value=%s, Timestamp=%s\n", record.Key, record.Value, record.Timestamp)
+			}
+
+			// Reset batch
+			topicData.Partitions[i].RecordBatch = RecordBatch{}
+			producer.TopicMap[topicName] = topicData
+			return
 		}
 	}
 }
