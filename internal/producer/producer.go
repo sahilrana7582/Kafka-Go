@@ -42,13 +42,14 @@ type RecordBatch struct {
 // Represents the data structure for a single partition within a ProduceRequest.
 type TopicPartitionData struct {
 	PartitionID int32
+	mu          sync.Mutex
 	RecordBatch RecordBatch
 }
 
 // Represents the data structure for a single topic within a ProduceRequest.
 type TopicData struct {
 	TopicName  string
-	Partitions map[int32]TopicPartitionData
+	Partitions map[int32]*TopicPartitionData
 }
 
 // Represents a Kafka Produce Request.
@@ -59,24 +60,32 @@ type ProduceRequest struct {
 	Acks      int16 // 0, 1, or -1 (all)
 	TimeoutMs int32 // Timeout for the request
 
-	Topics []TopicData
+	Topics []*TopicData
 }
 
 type Producer struct {
 	Name     string
-	TopicMap map[string]TopicData
-	mu       sync.Mutex
+	TopicMap map[string]*TopicData
+	mu       sync.RWMutex
 	Broker   BrokerInterface
+}
+
+type ProducerRecord struct {
+	Topic     string
+	Partition *int32
+	Key       string
+	Value     string
 }
 
 func NewProducer(name string, broker BrokerInterface) *Producer {
 	return &Producer{
 		Name:     name,
-		TopicMap: make(map[string]TopicData),
+		TopicMap: make(map[string]*TopicData),
 		Broker:   broker,
 	}
 }
 
 type BrokerInterface interface {
 	ReceiveProduceRequest(req ProduceRequest)
+	DescribeTopic(topicName string) (*TopicData, error)
 }

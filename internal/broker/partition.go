@@ -83,7 +83,7 @@ func (b *Broker) ReceiveProduceRequest(req producer.ProduceRequest) {
 		go func(topic producer.TopicData) {
 			defer wg.Done()
 			handleTopic(topic)
-		}(topic)
+		}(*topic)
 	}
 
 	wg.Wait()
@@ -128,7 +128,7 @@ func handleTopic(t producer.TopicData) {
 			// Simulate a delay to mimic real-world processing
 			time.Sleep(100 * time.Millisecond)
 
-		}(partitionID, partition)
+		}(partitionID, *partition)
 
 	}
 

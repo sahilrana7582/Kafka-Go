@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sahilrana7582/kafka-in-go/internal/producer"
 )
 
 func (b *Broker) CreateTopic(name string, partitions int) error {
@@ -115,8 +117,30 @@ func (b *Broker) ListTopics() {
 	}
 }
 
-/*
-======== Implementation For Later
-	DescribeTopic(topic string)
-	Returns metadata like number of partitions, file paths, etc.
-*/
+func (b *Broker) DescribeTopic(name string) (*producer.TopicData, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	topic, exists := b.topics[name]
+	if !exists {
+		return nil, fmt.Errorf("topic %s does not exist", name)
+	}
+
+	topicData := &producer.TopicData{
+		TopicName:  topic.Name,
+		Partitions: make(map[int32]*producer.TopicPartitionData),
+	}
+	for _, partition := range topic.Partitions {
+		topicData.Partitions[int32(partition.ID)] = &producer.TopicPartitionData{
+			PartitionID: int32(partition.ID),
+			RecordBatch: producer.RecordBatch{
+				RecordCount: 0,
+				Records:     []producer.Record{},
+			},
+		}
+	}
+	if len(topicData.Partitions) == 0 {
+		return nil, fmt.Errorf("topic %s has no partitions", name)
+	}
+	return topicData, nil
+}

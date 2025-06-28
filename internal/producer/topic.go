@@ -3,137 +3,96 @@ package producer
 import (
 	"fmt"
 	"hash/fnv"
-	"log"
-	"os"
 	"time"
 )
 
-func (producer *Producer) AddTopic(topicName string) {
-	if _, exists := producer.TopicMap[topicName]; !exists {
-		producer.TopicMap[topicName] = TopicData{
-			TopicName:  topicName,
-			Partitions: make(map[int32]TopicPartitionData),
-		}
+func (p *Producer) Send(record ProducerRecord) error {
+	if record.Topic == "" {
+		return fmt.Errorf("topic cannot be empty")
 	}
+
+	if record.Value == "" {
+		return fmt.Errorf("value cannot be empty")
+	}
+
+	if record.Key == "" {
+		record.Key = generateRandomKey()
+	}
+
+	topicData, err := p.getMetaData(record.Topic)
+	if err != nil {
+		return fmt.Errorf("failed to get metadata for topic %s: %w", record.Topic, err)
+	}
+
+	if record.Partition == nil {
+		partitionID := partitionKey(record.Key, len(p.TopicMap[record.Topic].Partitions))
+		record.Partition = &partitionID
+	}
+
+	totalPartition := len(topicData.Partitions)
+	newRecord := Record{
+		OffsetDelta: int32(len(topicData.Partitions[*record.Partition].RecordBatch.Records)),
+		Timestamp:   time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
+		Headers: []RecordHeader{
+			{Key: []byte("header-key"), Value: []byte(record.Key)},
+			{Key: []byte("header-value"), Value: []byte("header-value")},
+		},
+		Key:   []byte(record.Key),
+		Value: []byte(record.Value),
+	}
+	err = p.AddToPartition(record.Key, topicData, totalPartition, newRecord)
+	if err != nil {
+		return fmt.Errorf("failed to add record to partition: %w", err)
+	}
+	fmt.Printf("Produced record with key: %s, value: %s to topic: %s, partition: %d\n", record.Key, record.Value, record.Topic, *record.Partition)
+	return nil
 }
 
-func (producer *Producer) AddPartition(topicName string, partitionID int32) {
-	if topicData, exists := producer.TopicMap[topicName]; exists {
-		for _, partition := range topicData.Partitions {
-			if partition.PartitionID == partitionID {
-				return
-			}
-		}
-		partitionNew := TopicPartitionData{
-			PartitionID: partitionID,
-			RecordBatch: RecordBatch{},
-		}
+func (producer *Producer) AddToPartition(key string, topicData *TopicData, totalPart int, record Record) error {
+	// producer.mu.Lock()
+	// defer producer.mu.Unlock()
 
-		topicData.Partitions[partitionID] = partitionNew
-		producer.TopicMap[topicName] = topicData
-	} else {
-		producer.AddTopic(topicName)
-		producer.AddPartition(topicName, partitionID)
-	}
-}
-
-func (producer *Producer) AddToPartition(key, topicName string, record Record) error {
-	producer.mu.Lock()
-	defer producer.mu.Unlock()
-
-	topicData, exists := producer.TopicMap[topicName]
-	if !exists {
-		return fmt.Errorf("topic %s does not exist", topicName)
-	}
-
-	partitionId := partitionKey(key)
+	partitionId := partitionKey(key, totalPart)
 	if partitionData, exists := topicData.Partitions[partitionId]; exists {
+		partitionData.mu.Lock()
+		defer partitionData.mu.Unlock()
 
 		partitionData.RecordBatch.Records = append(partitionData.RecordBatch.Records, record)
 		partitionData.RecordBatch.RecordCount++
 
-		topicData.Partitions[partitionId] = partitionData
-		producer.TopicMap[topicName] = topicData
 		fmt.Printf("Current record count in partition %d: %d\n", partitionId, partitionData.RecordBatch.RecordCount)
-		if partitionData.RecordBatch.RecordCount >= totalPartition {
-			go producer.FlushBatch(topicName, partitionId)
+		if partitionData.RecordBatch.RecordCount >= 5 {
+			go producer.FlushBatch(topicData, partitionId)
 		}
 
 	}
 	return nil
 }
 
-func partitionKey(key string) int32 {
+func partitionKey(key string, totalPartition int) int32 {
 	hash := fnv.New32a()
 	hash.Write([]byte(key))
 	partitionIndex := int(hash.Sum32()) % totalPartition
 	return int32(partitionIndex)
 }
 
-func Demo(topicName string, producer *Producer) {
-	fmt.Printf("Demoing topic: %s\n", topicName)
-	producer.AddTopic(topicName)
+func (producer *Producer) FlushBatch(topicData *TopicData, partitionId int32) {
+	// producer.mu.Lock()
+	// defer producer.mu.Unlock()
 
-	for i := 0; i < totalPartition; i++ {
-		producer.AddPartition(topicName, int32(i))
-	}
-
-	fmt.Printf("Added %d partitions to topic %s\n", totalPartition, topicName)
-	i := 0
-	for {
-		record := Record{
-			OffsetDelta: int32(i),
-			Timestamp:   time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
-			Headers: []RecordHeader{
-				{Key: []byte("header-key"), Value: []byte("header-value")},
-			},
-			Key:   []byte(fmt.Sprintf("key-%d", i)),
-			Value: []byte(fmt.Sprintf("value-%d", i)),
-		}
-
-		err := producer.AddToPartition(fmt.Sprintf("key-%d", i), topicName, record)
-		if err != nil {
-			fmt.Printf("Failed to produce record: %v\n", err)
-		} else {
-			fmt.Printf("Produced record with key: %s, value: %s\n", record.Key, record.Value)
-		}
-
-		time.Sleep(500 * time.Millisecond)
-		producer.mu.Lock()
-		i++
-		producer.mu.Unlock()
-	}
-}
-
-func (producer *Producer) FlushBatch(topicName string, partitionId int32) {
-	producer.mu.Lock()
-	defer producer.mu.Unlock()
-
-	file, err := os.OpenFile("internal/producer/flush.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("❌ Failed to open flush log file: %v", err)
-		return
-	}
-	defer file.Close()
-
-	logger := log.New(file, "FLUSH: ", log.LstdFlags|log.Lshortfile)
-
-	// Get topic data
-	topicData, ok := producer.TopicMap[topicName]
-	if !ok {
-		logger.Printf("❌ Topic %s not found\n", topicName)
-		return
-	}
+	topicName := topicData.TopicName
 
 	// Get partition data
 	partitionData, ok := topicData.Partitions[partitionId]
 	if !ok {
-		logger.Printf("❌ Partition %d not found in topic %s\n", partitionId, topicName)
+		fmt.Printf("❌ Partition %d not found in topic %s\n", partitionId, topicName)
 		return
 	}
 
+	partitionData.mu.Lock()
+	defer partitionData.mu.Unlock()
 	if partitionData.RecordBatch.RecordCount == 0 {
-		logger.Printf("⚠️  No records to flush for topic %s partition %d\n", topicName, partitionId)
+		fmt.Printf("⚠️  No records to flush for topic %s partition %d\n", topicName, partitionId)
 		return
 	}
 
@@ -141,10 +100,10 @@ func (producer *Producer) FlushBatch(topicName string, partitionId int32) {
 	produceReq := ProduceRequest{
 		Acks:      1,
 		TimeoutMs: 5000,
-		Topics: []TopicData{
+		Topics: []*TopicData{
 			{
 				TopicName: topicName,
-				Partitions: map[int32]TopicPartitionData{
+				Partitions: map[int32]*TopicPartitionData{
 					partitionId: {
 						PartitionID: partitionId,
 						RecordBatch: partitionData.RecordBatch,
@@ -154,22 +113,39 @@ func (producer *Producer) FlushBatch(topicName string, partitionId int32) {
 		},
 	}
 
-	logger.Printf("🚀 Flushing %d records from topic %s partition %d\n", partitionData.RecordBatch.RecordCount, topicName, partitionId)
-	for _, record := range partitionData.RecordBatch.Records {
-		logger.Printf("Flushing record: key=%s, value=%s\n", record.Key, record.Value)
-	}
-
 	// 🔄 Send it to the Broker (if you want to simulate this)
 	if producer.Broker != nil {
 		producer.Broker.ReceiveProduceRequest(produceReq)
 	}
 
 	// 🔄 Clear batch after flushing
-	partitionData.RecordBatch.Records = nil
+	partitionData.RecordBatch.Records = make([]Record, 0)
 	partitionData.RecordBatch.RecordCount = 0
-	topicData.Partitions[partitionId] = partitionData
-	producer.TopicMap[topicName] = topicData
 
-	logger.Printf("✅ Flushed and cleared batch for topic %s partition %d\n", topicName, partitionId)
-	logger.Println("=========================================")
+	fmt.Printf("✅ Flushed and cleared batch for topic %s partition %d\n", topicName, partitionId)
+	fmt.Println("=========================================")
+}
+
+func (p *Producer) getMetaData(topicName string) (*TopicData, error) {
+
+	p.mu.RLock()
+	topicData, exists := p.TopicMap[topicName]
+	p.mu.RUnlock()
+	if !exists {
+		tempTopicData, err := p.Broker.DescribeTopic(topicName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe topic %s: %w", topicName, err)
+		}
+		topicData = tempTopicData
+		p.mu.Lock()
+		p.TopicMap[topicName] = topicData
+		p.mu.Unlock()
+	}
+
+	return topicData, nil
+}
+
+func generateRandomKey() string {
+	key := fmt.Sprintf("key-%d", time.Now().UnixNano()%1000)
+	return key
 }
