@@ -41,9 +41,10 @@ type RecordBatch struct {
 
 // Represents the data structure for a single partition within a ProduceRequest.
 type TopicPartitionData struct {
-	PartitionID int32
-	mu          sync.Mutex
-	RecordBatch RecordBatch
+	PartitionID   int32
+	mu            sync.Mutex
+	RecordBatch   RecordBatch
+	LastFlushTime time.Time
 }
 
 // Represents the data structure for a single topic within a ProduceRequest.

@@ -1,11 +1,13 @@
 package broker
 
 import (
+	"bufio"
 	"fmt"
 	"hash/fnv"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,65 +75,76 @@ func FormatProductionMessage(key, topic, value string) string {
 }
 
 func (b *Broker) ReceiveProduceRequest(req producer.ProduceRequest) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	wg := sync.WaitGroup{}
 
 	for _, topic := range req.Topics {
 		wg.Add(1)
 		go func(topic producer.TopicData) {
 			defer wg.Done()
-			handleTopic(topic)
+			b.handleTopic(topic) // Call broker's method
 		}(*topic)
 	}
 
 	wg.Wait()
-	fmt.Printf("✅ Broker ACK: received batch for client\n")
 }
 
-func handleTopic(t producer.TopicData) {
+func (b *Broker) handleTopic(t producer.TopicData) {
 	wg := sync.WaitGroup{}
 
 	for partitionID, partition := range t.Partitions {
 		wg.Add(1)
 
-		go func(partitionID int32, partition producer.TopicPartitionData) {
+		go func(partitionID int32, partition *producer.TopicPartitionData) {
 			defer wg.Done()
 
-			partitionPath := filepath.Join("kafka-data", t.TopicName, fmt.Sprintf("partition-%d.log", partitionID))
+			// Ensure the directory exists
+			partitionDir := filepath.Join("kafka-data", t.TopicName)
+			if err := os.MkdirAll(partitionDir, 0755); err != nil {
+				fmt.Printf("❌ Failed to create directory %s: %v\n", partitionDir, err)
+				return
+			}
 
+			partitionPath := filepath.Join(partitionDir, fmt.Sprintf("partition-%d.log", partitionID))
+
+			// Open file in append mode. O_CREATE will create if not exists, O_WRONLY for write only.
 			file, err := os.OpenFile(partitionPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				fmt.Printf("❌ Failed to open partition file %s: %v\n", partitionPath, err)
 				return
 			}
 			defer file.Close()
-			fmt.Printf("🛠️ Processing partition %d of topic %s...\n", partitionID, t.TopicName)
+
+			writer := bufio.NewWriter(file)
+
+			var batchContent strings.Builder
+
+			batchContent.Grow(len(partition.RecordBatch.Records) * 100)
+
 			for _, record := range partition.RecordBatch.Records {
-				message := fmt.Sprintf("%s	|	|	%s	|	%s	|	%s\n",
-					record.Timestamp,
+
+				message := fmt.Sprintf("%s | %s | %s | %s\n",
+					record.Timestamp, // Assumed to be a formatted string already
 					string(record.Key),
 					t.TopicName,
 					string(record.Value),
 				)
-				if _, err := file.WriteString(message); err != nil {
-					fmt.Printf("❌ Failed to write record to partition %d of topic %s: %v\n", partitionID, t.TopicName, err)
-					return
-				}
+				batchContent.WriteString(message)
 			}
-			if err := file.Sync(); err != nil {
-				fmt.Printf("❌ Failed to sync partition file %s: %v\n", partitionPath, err)
+
+			// Write the entire batch content to the buffered writer
+			if _, err := writer.WriteString(batchContent.String()); err != nil {
+				fmt.Printf("❌ Failed to write batch to partition %d of topic %s: %v\n", partitionID, t.TopicName, err)
 				return
 			}
-			fmt.Printf("✅ Partition %d of topic %s processed successfully.\n", partitionID, t.TopicName)
-			// Simulate a delay to mimic real-world processing
-			time.Sleep(100 * time.Millisecond)
 
-		}(partitionID, *partition)
+			// Flush the buffered writer to the underlying file
+			if err := writer.Flush(); err != nil {
+				fmt.Printf("❌ Failed to flush writer for partition %d of topic %s: %v\n", partitionID, t.TopicName, err)
+				return
+			}
 
+		}(partitionID, partition)
 	}
 
 	wg.Wait()
-	fmt.Printf("✅ Broker ACK: received batch for topic %s (Partitions: %d)\n", t.TopicName, len(t.Partitions))
 }

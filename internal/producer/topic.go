@@ -32,7 +32,6 @@ func (p *Producer) Send(record ProducerRecord) error {
 	totalPartition := len(topicData.Partitions)
 	newRecord := Record{
 		OffsetDelta: int32(len(topicData.Partitions[*record.Partition].RecordBatch.Records)),
-		Timestamp:   time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
 		Headers: []RecordHeader{
 			{Key: []byte("header-key"), Value: []byte(record.Key)},
 			{Key: []byte("header-value"), Value: []byte("header-value")},
@@ -61,8 +60,9 @@ func (producer *Producer) AddToPartition(key string, topicData *TopicData, total
 		partitionData.RecordBatch.RecordCount++
 
 		fmt.Printf("Current record count in partition %d: %d\n", partitionId, partitionData.RecordBatch.RecordCount)
-		if partitionData.RecordBatch.RecordCount >= 5 {
+		if partitionData.RecordBatch.RecordCount >= 5 || time.Since(partitionData.LastFlushTime) >= 2*time.Second {
 			go producer.FlushBatch(topicData, partitionId)
+			partitionData.LastFlushTime = time.Now()
 		}
 
 	}
