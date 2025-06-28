@@ -1,4 +1,3 @@
-# Kafka-Go
 # Kafka-Go 🦜⚙️  
 A simplified Kafka-like messaging system implemented in **Go**. This is a learning-focused project that simulates core Kafka functionalities such as topics, partitions, producers, consumers, and file-backed storage.
 
@@ -21,14 +20,25 @@ A simplified Kafka-like messaging system implemented in **Go**. This is a learni
 
 ## 🧠 Project Structure
 kafka-go/
+
 ├── cmd/
+
 │ ├── broker/ # Producer CLI entrypoint
+
 │ ├── producer/ # Producer CLI entrypoint
+
 │ └── consumer/ # Consumer CLI entrypoint
+
 ├── internal/
+
 │ ├── broker/ # Core message broker logic (topics, partitions)
+
 │ ├── producer/ # Producer logic
+
 │ ├── consumer/ # Consumer logic
+
 │ └── utils/ # Hashing, file helpers, etc.
+
 ├── kafka-data/ # Log data stored on disk
+
 └── README.md
